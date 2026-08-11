@@ -779,6 +779,14 @@ func (r InstanceResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
+	if plan.Devices.IsNull() {
+		plan.Devices, diags = common.EmptyDeviceSetType(ctx)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	remote := plan.Remote.ValueString()
 	project := plan.Project.ValueString()
 	target := plan.Target.ValueString()
@@ -983,6 +991,37 @@ func (r InstanceResource) Update(ctx context.Context, req resource.UpdateRequest
 
 	devices, diags := common.ToDeviceMap(ctx, plan.Devices)
 	resp.Diagnostics.Append(diags...)
+
+	stateDevices, diags := common.ToDeviceMap(ctx, state.Devices)
+	resp.Diagnostics.Append(diags...)
+	for deviceName := range devices {
+		if _, managedByInstance := stateDevices[deviceName]; managedByInstance {
+			continue
+		}
+
+		if _, existsLocally := instance.Devices[deviceName]; !existsLocally {
+			continue
+		}
+
+		resp.Diagnostics.AddError(
+			fmt.Sprintf("Refusing to overwrite local device %q on instance %q", deviceName, instanceName),
+			"The device is not managed by incus_instance and may be managed by incus_instance_device or another external actor.",
+		)
+		return
+	}
+
+	for deviceName, device := range instance.Devices {
+		if _, managedByInstance := stateDevices[deviceName]; managedByInstance {
+			continue
+		}
+
+		if _, plannedByInstance := devices[deviceName]; plannedByInstance {
+			continue
+		}
+
+		// Preserve local devices owned by another resource.
+		devices[deviceName] = device
+	}
 
 	userConfig, diags := common.ToConfigMap(ctx, plan.Config)
 	resp.Diagnostics.Append(diags...)
@@ -1413,7 +1452,14 @@ func (r InstanceResource) SyncState(ctx context.Context, tfState *tfsdk.State, s
 	profiles, diags := ToProfileListType(ctx, instance.Profiles)
 	respDiags.Append(diags...)
 
-	devices, diags := common.ToDeviceSetTypePreservingNulls(ctx, instance.Devices, m.Devices)
+	stateDevices := instance.Devices
+	if !m.Devices.IsNull() && !m.Devices.IsUnknown() {
+		managedDevices, diags := common.ToDeviceMap(ctx, m.Devices)
+		respDiags.Append(diags...)
+		stateDevices = filterDevicesByName(instance.Devices, managedDevices)
+	}
+
+	devices, diags := common.ToDeviceSetTypePreservingNulls(ctx, stateDevices, m.Devices)
 	respDiags.Append(diags...)
 
 	interfaces, diags := common.ToInterfaceMapType(ctx, instanceState.Network, instance.Config)
@@ -1462,6 +1508,20 @@ func (r InstanceResource) SyncState(ctx context.Context, tfState *tfsdk.State, s
 	m.Target = types.StringValue(actualTarget)
 
 	return tfState.Set(ctx, &m)
+}
+
+func filterDevicesByName(devices map[string]map[string]string, names map[string]map[string]string) map[string]map[string]string {
+	filtered := make(map[string]map[string]string, len(names))
+	for name := range names {
+		device, ok := devices[name]
+		if !ok {
+			continue
+		}
+
+		filtered[name] = device
+	}
+
+	return filtered
 }
 
 func (r InstanceResource) createInstanceFromImage(ctx context.Context, server incus.InstanceServer, plan InstanceModel) diag.Diagnostics {
