@@ -49,6 +49,11 @@ func ToDeviceSetType(ctx context.Context, devices map[string]map[string]string) 
 	return toDeviceSetType(ctx, devices, types.SetNull(types.ObjectType{AttrTypes: deviceType()}), false)
 }
 
+// EmptyDeviceSetType returns a known empty device set for resource state.
+func EmptyDeviceSetType(ctx context.Context) (types.Set, diag.Diagnostics) {
+	return types.SetValueFrom(ctx, types.ObjectType{AttrTypes: deviceType()}, []DeviceModel{})
+}
+
 // ToDeviceSetTypePreservingNulls converts devices from map[string]map[string]string
 // into types.Set, preserving null property values from the model when the API
 // omits those properties.

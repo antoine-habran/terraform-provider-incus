@@ -779,6 +779,14 @@ func (r InstanceResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
+	if plan.Devices.IsNull() {
+		plan.Devices, diags = common.EmptyDeviceSetType(ctx)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	remote := plan.Remote.ValueString()
 	project := plan.Project.ValueString()
 	target := plan.Target.ValueString()
